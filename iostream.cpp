@@ -1,3 +1,6 @@
+#define _OPEN_SYS_UNLOCKED_EXT 1
+
+
 #include <stdint.h>
 #include <fstream>
 #include <iostream>
@@ -17,26 +20,35 @@
 
 $ g++ -std=c++11 -O3 iostream.cpp -o iostream   (g++ 4.8.4)
 $ ./iostream
-           iostream+endl: 2047.39 cycles
-             iostream+\n: 102.787 cycles
-           Glibc+fprintf: 130.482 cycles
-             Glibc+fputs: 85.4909 cycles
-    Glibc+fputs_unlocked: 70.5293 cycles
-            Kernel+write: 1783.06 cycles
-                Str+endl: 124.693 cycles
-                  Str+\n: 134.532 cycles
+           iostream+endl: 1374.68 cycles
+             iostream+\n: 159.43 cycles
+           Glibc+fprintf: 141.268 cycles
+             Glibc+fputs: 99.5037 cycles
+    Glibc+fputs_unlocked: 74.8459 cycles
+            Kernel+write: 1136.71 cycles
+                Str+endl: 117.318 cycles
+                  Str+\n: 125.912 cycles
+    iostream+double+endl: 2265.17 cycles
+      iostream+double+\n: 1034.05 cycles
+    Glibc+fprintf+double: 697.966 cycles
+         Str+double+endl: 996.361 cycles
+           Str+double+\n: 1016.91 cycles
 
 $ clang++-3.6 -std=c++11 -O3 iostream.cpp -o iostream
 $ ./iostream
-           iostream+endl: 2058.03 cycles
-             iostream+\n: 101.378 cycles
-           Glibc+fprintf: 87.2705 cycles
-             Glibc+fputs: 86.6846 cycles
-    Glibc+fputs_unlocked: 67.262 cycles
-            Kernel+write: 1782.18 cycles
-                Str+endl: 117.971 cycles
-                  Str+\n: 133.46 cycles
-
+           iostream+endl: 1380.73 cycles
+             iostream+\n: 165.854 cycles
+           Glibc+fprintf: 86.6088 cycles
+             Glibc+fputs: 101.1 cycles
+    Glibc+fputs_unlocked: 90.0366 cycles
+            Kernel+write: 1148.61 cycles
+                Str+endl: 123.951 cycles
+                  Str+\n: 149.701 cycles
+    iostream+double+endl: 2307.69 cycles
+      iostream+double+\n: 1091.57 cycles
+    Glibc+fprintf+double: 674.236 cycles
+         Str+double+endl: 1052.65 cycles
+           Str+double+\n: 1047.78 cycles
 */
 
 static inline uint64_t rdtsc()
@@ -65,7 +77,11 @@ int main()
     std::vector<Test> test{
             "iostream+endl", "iostream+\\n",
             "Glibc+fprintf", "Glibc+fputs", "Glibc+fputs_unlocked", "Kernel+write",
-            "Str+endl", "Str+\\n",  "Empty"
+            "Str+endl", "Str+\\n",
+            "iostream+double+endl", "iostream+double+\\n",
+            "Glibc+fprintf+double",
+            "Str+double+endl", "Str+double+\\n",
+            "Empty"
     };
     const uint32_t numtests = test.size();
     std::random_device rd;
@@ -91,17 +107,23 @@ int main()
         uint64_t t0,t1;
         for ( uint64_t j=0; j<NLOOPS; ++j ) {
             uint32_t k = di(gen);
+            double x = k/3;
             if ( (t0=rdtsc())==0 ) continue;
             switch( k ) {
-                case 0: outfile << "Hello world" << std::endl; break;
-                case 1: outfile2 << "Hello world\n"; break;
+                case 0: outfile << "Hello world " << std::endl; break;
+                case 1: outfile2 << "Hello world " << "\n"; break;
                 case 2: fprintf( fout1, "Hello world\n" ); break;
                 case 3: fputs( "Hello world\n", fout2 ); break;
                 case 4: fputs_unlocked( "Hello world\n", fout3 ); break;
                 case 5: write( fid, "Hello world\n", 12 ); break;
-                case 6: outstr1 << "Hello world" << std::endl; break;
-                case 7: outstr2 << "Hello world" << "\n"; break;
-                case 8: break;
+                case 6: outstr1 << "Hello world " << std::endl; break;
+                case 7: outstr2 << "Hello world " << "\n"; break;
+                case 8: outfile << "Hello world " << x << std::endl; break;
+                case 9: outfile2 << "Hello world " << x << "\n"; break;
+                case 10: fprintf( fout1, "Hello world %f\n", x ); break;
+                case 11: outstr1 << "Hello world " << x << std::endl; break;
+                case 12: outstr2 << "Hello world " << x << "\n"; break;
+                case 13: break;
             }
             if ( (t1=rdtsc())==0 ) continue;
             test[k].update( t1-t0 );
