@@ -51,7 +51,7 @@ else
 fi
 
 if [ $# -ge 4 ]; then
-    CACHE_DIR=$(reaadlink -f "$4" )
+    CACHE_DIR=$(readlink -f "$4" )
 else
     CACHE_DIR=$DEFAULT_CACHE_DIR
 fi
@@ -92,7 +92,7 @@ if [ ! -e $BUILD_DIR/clang.$CLANG_VER.done ]; then
         TARFILE="${pkg}-${CLANG_VER}.src.tar.xz"
         UNTARDIR="${pkg}-$CLANG_VER"
         if [ ! -e "$CACHE_DIR/$TARFILE" ]; then
-            wget "$MIRROR_URL/releases/$CLANG_VER/$TARFILE" -o "$CACHE_DIR/$TARFILE"
+            wget "$MIRROR_URL/releases/$CLANG_VER/$TARFILE" -O "$CACHE_DIR/$TARFILE"
         fi
         rm -rf "$UNTARDIR"
         rm -rf "$UNTARDIR.src"
@@ -133,7 +133,6 @@ if [ ! -e $BUILD_DIR/clang.$CLANG_VER.done ]; then
           -DLLVM_INCLUDE_DOCS=OFF \
           -DLLVM_BUILD_EXAMPLES=OFF \
           -DLLVM_INCLUDE_EXAMPLES=ON \
-          -DLLVM_CCACHE_BUILD=ON \
           -DLLVM_TARGETS_TO_BUILD=X86 \
           -DLLVM_BUILD_TOOLS=ON \
           -DLLVM_INCLUDE_TOOLS=ON \
