@@ -1,19 +1,19 @@
 #!/bin/bash
 set -e
 set -x
-INSTALL_DIR=$PWD/install
-CACHE_DIR=$HOME/tests/cache
+INSTALL_DIR=${INSTALL_DIR:-$PWD/install}
+CACHE_DIR=${CACHE_DIR:-$HOME/.cache}
 MONGOC_URL=https://github.com/mongodb/mongo-c-driver/releases/download/
 MONGOC_VERSION=1.15.1
 MONGOCXX_URL=https://github.com/mongodb/mongo-cxx-driver/archive/debian/
 MONGOCXX_VERSION=3.4.0-1
 BUILDTYPE=release
-SHAREDLIBS=on
-STATICLIBS=off
+SHAREDLIBS=off
+STATICLIBS=on
 CXX=g++
 CC=gcc
 NUMJOBS=4
-GENERATOR="Unix Makefiles"
+GENERATOR=Ninja
 
 if false; then
     pacman -Su --noconfirm \
@@ -39,6 +39,7 @@ then
     rm -rf mongo-c-driver-$MONGOC_VERSION
     tar xaf $CACHE_DIR/mongo-c-driver-$MONGOC_VERSION.tar.gz
     pushd mongo-c-driver-$MONGOC_VERSION
+
     mkdir -p tmp
     cd tmp
     cmake \
@@ -46,14 +47,16 @@ then
 	-DCMAKE_BUILD_TYPE:STRING=$BUILDTYPE \
 	-DCMAKE_C_COMPILER:FILEPATH=$CC \
 	-DCMAKE_C_FLAGS:STRING="-D__USE_MINGW_ANSI_STDIO=1" \
+	-DCMAKE_CXX_FLAGS:STRING="-Wno-deprecated-declarations" \
 	-DENABLE_AUTOMATIC_INIT_AND_CLEANUP:BOOL=OFF \
 	-DENABLE_EXTRA_ALIGNMENT:BOOL=OFF \
 	-DENABLE_COVERAGE:BOOL=OFF \
 	-DENABLE_EXAMPLES:BOOL=OFF \
 	-DENABLE_TESTS:BOOL=OFF \
 	-DENABLE_ZSTD:BOOL=OFF \
-	-DENABLE_STATIC:BOOL=$STATICLIBS \
-	-DBUILD_SHARED_LIBS:BOOL=$SHAREDLIBS \
+	-DENABLE_BSON:BOOL=AUTO \
+	-DENABLE_STATIC:STRING=ON \
+	-DBUILD_SHARED_LIBS=OFF \
 	-G "$GENERATOR" ..
     cmake --build . --parallel $NUMJOBS --target install
     popd
@@ -84,10 +87,10 @@ then
 	  -DBSONCXX_POLY_USE_BOOST=1 \
 	  -DCMAKE_C_COMPILER:FILEPATH=$CC \
 	  -DCMAKE_CXX_COMPILER:FILEPATH=$CXX \
-	  -DBUILD_SHARED_LIBS:BOOL=$SHAREDLIBS \
 	  -DMONGOCXX_ENABLE_SLOW_TESTS:BOOL=OFF \
 	  -DMONGOCXX_ENABLE_SSL:BOOL=ON \
-	  -DCMAKE_C_FLAGS="-D__USE_MINGW_ANSI_STDIO=1" \
+	  -DENABLE_STATIC=ON \
+	  -DBUILD_SHARED_LIBS=OFF \
 	  -G "$GENERATOR" ..
     cmake --build . --parallel $NUMJOBS --target install
     popd
@@ -95,6 +98,44 @@ then
     rm -rf mongo-cxx-driver-debian-$MONGOCXX_VERSION
 fi
 
+cat <<EOF > mongocxx-test.cpp
+#include <iostream>
+#include <bsoncxx/builder/stream/document.hpp>
+#include <bsoncxx/json.hpp>
+#include <mongocxx/client.hpp>
+#include <mongocxx/instance.hpp>
 
+int main(int, char**) {
+    mongocxx::instance inst{};
+    mongocxx::client conn{mongocxx::uri{}};
+
+    bsoncxx::builder::stream::document document{};
+
+    auto collection = conn["testdb"]["testcollection"];
+    document << "hello" << "world";
+
+    collection.insert_one(document.view());
+    auto cursor = collection.find({});
+
+    for (auto&& doc : cursor) {
+        std::cout << bsoncxx::to_json(doc) << std::endl;
+    }
+}
+EOF
+MONGOCXX_CFLAGS="\
+	       -DMONGOCXX_STATIC -DBSONCXX_STATIC \
+	       -DMONGOC_STATIC -DBSON_STATIC \
+	       -I$INSTALL_DIR/include/mongocxx/v_noabi \
+	       -I$INSTALL_DIR/include/bsoncxx/v_noabi \
+	       -I$INSTALL_DIR/include/libmongoc-1.0 \
+	       -I$INSTALL_DIR/include/libbson-1.0"
+MONGOCXX_LDFLAGS="\
+		-L$INSTALL_DIR/lib \
+		-lmongocxx-static -lbsoncxx-static \
+		-lmongoc-static-1.0 \
+		-lz -lsnappy -licuuc -lbson-static-1.0 \
+		-lcrypt32 -lDnsapi -lBcrypt -lSecur32 -lWs2_32"
+$CXX -O3 -fPIC mongocxx-test.cpp -o mongocxx-test \
+     ${MONGOCXX_CFLAGS} ${MONGOCXX_LDFLAGS}
 
 
