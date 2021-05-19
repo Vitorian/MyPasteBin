@@ -1,33 +1,50 @@
+#!/bin/bash -x
 
-INSTALL_DIR=$HOME/git
 PKGSRC_VER=2020Q1
-
-mkdir -p $INSTALL_DIR
-cd $INSTALL_DIR
-cvs -q -z2 -d anoncvs@anoncvs.NetBSD.org:/cvsroot checkout -r pkgsrc-${PKGSRC_VER} -P pkgsrc
-
-cd ${INSTALL_DIR}/pkgsrc/bootstrap
-unset PKG_PATH 
+SOURCE_DIR=$HOME/git
+INSTALL_DIR=$HOME/pkg-${PKGSRC_VER}
 export SH=/bin/bash
-export bootstrap_sh=/bin/bash 
-./bootstrap --unprivileged
 
-export PATH=$HOME/pkg/bin:$HOME/pkg/sbin:$PATH
-export PKG_PATH=$HOME/pkg
+# Make the entire script fail if something fails
+set -exo pipefail
+
+# Create the build directory and clone pkgsrc
+mkdir -p ${SOURCE_DIR}
+cd ${SOURCE_DIR}
+if [ ! -f pkgsrc-${PKGSRC_VER}.tar.gz ]; then
+    rm -rf pkgsrc-${PKGSRC_VER} pkgsrc
+    cvs -q -z2 -d anoncvs@anoncvs.NetBSD.org:/cvsroot checkout -r pkgsrc-${PKGSRC_VER} -P pkgsrc
+    mv pkgsrc pkgsrc-${PKGSRC_VER}
+    tar caf pkgsrc-${PKGSRC_VER}.tar.gz pkgsrc-${PKGSRC_VER}
+fi
+rm -rf pkgsrc-${PKGSRC_VER}
+tar xaf pkgsrc-${PKGSRC_VER}.tar.gz
+
+# Build the bootstrap
+if [ ! -f ${INSTALL_DIR}/bin ]; then
+    cd ${SOURCE_DIR}/pkgsrc-${PKGSRC_VER}/bootstrap
+    unset PKG_PATH
+    export bootstrap_sh=/bin/bash
+    ./bootstrap --unprivileged --prefix ${INSTALL_DIR}
+fi
+
+# Put the bootstrap into PATH
+# Consider putting this in your .bashrc or .bash_profile
+export PATH=${INSTALL_DIR}/bin:${INSTALL_DIR}/sbin:$PATH
 export MAKECONF=$PKG_PATH/etc/pkgsrc.mk.conf
 
-( 
+(
 cat << 'ENDTEXT'
 GROUP!=		/usr/bin/id -gn
 SU_CMD=		sh -c
-DISTDIR=	${HOME}/pkg/distfiles/All
-PKG_DBDIR=	${HOME}/pkg/pkgdb
-LOCALBASE=	${HOME}/pkg
-PKG_TOOLS_BIN=	${HOME}/pkg/sbin
+DISTDIR=	${INSTALL_DIR}/distfiles/All
+PKG_DBDIR=	${INSTALL_DIR}/pkgdb
+LOCALBASE=	${INSTALL_DIR}
+PKG_TOOLS_BIN=	${INSTALL_DIR}/sbin
 #INSTALL_DATA=	install -c -o ${BINOWN} -g ${BINGRP} -m 444
-WRKOBJDIR=	${HOME}/tmp		# build here instead of in pkgsrc
-OBJHOSTNAME=	yes			# use work.`hostname`
-VARBASE=	${HOME}/var
+WRKOBJDIR=	${INSTALL_DIR}/tmp		# build here instead of in pkgsrc
+OBJHOSTNAME= yes			# use work.`hostname`
+VARBASE=	${INSTALL_DIR}/var
 
 CHOWN=		true
 CHGRP=		true
@@ -54,13 +71,11 @@ NLSGRP=		${GROUP}
 SHAREOWN=	${USER}
 SHAREGRP=	${GROUP}
 ALLOW_VULNERABLE_PACKAGES=yes
-.-include "$HOME/pkg/etc/mk.conf"
+.-include "${INSTALL_DIR}/etc/mk.conf"
 ENDTEXT
-) > $HOME/pkg/etc/pkgsrc.mk.conf
+) > ${INSTALL_DIR}/etc/pkgsrc.mk.conf
 
 unset PKG_PATH
-cd $INSTALL_DIR/pkgsrc
+cd ${SOURCE_DIR}/pkgsrc-${PKGSRC_VER}
 bmake configure
 bmake install
-
-
