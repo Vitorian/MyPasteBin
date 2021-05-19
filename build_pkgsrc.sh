@@ -33,10 +33,12 @@ fi
 export PATH=${INSTALL_DIR}/bin:${INSTALL_DIR}/sbin:$PATH
 export MAKECONF=$PKG_PATH/etc/pkgsrc.mk.conf
 
+GROUP=$(/usr/bin/id -gn)
+
 (
-cat << 'ENDTEXT'
-GROUP!=		/usr/bin/id -gn
-SU_CMD=		sh -c
+cat << ENDTEXT
+GROUP!=		${GROUP}
+SU_CMD=		${SH} -c
 DISTDIR=	${INSTALL_DIR}/distfiles/All
 PKG_DBDIR=	${INSTALL_DIR}/pkgdb
 LOCALBASE=	${INSTALL_DIR}
