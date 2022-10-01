@@ -9,7 +9,7 @@
 #     dd if=/dev/zero of=disk.img bs=1M count=4096
 #     mkfs.btrfs -d single -m single --mixed disk.img
 #     mkdir disk
-#     sudo mount -o loop,compress=lzo disk.img disk
+#     sudo mount -o loop,compress=zlib:6 disk.img disk
 #     chown <your username> disk
 #
 # Github:
@@ -17,211 +17,182 @@
 # Dont write a clang plugin
 #  https://chromium.googlesource.com/chromium/src/+/master/docs/writing_clang_plugins.md#Having-said-that
 
-MIRROR_URL="http://llvm.org"
-DEFAULT_CACHE_DIR=$HOME/cache
+TODAY=$(date +%Y%m%d)
+
+function download_clang()
+{
+    # check if it is already downloaded
+    if [ ! -e "${CACHE_DIR}/clang-${CLANG_VER}.tar.xz" ]; then
+        # check if it is a git request
+        if [ "$CLANG_VER" == "$TODAY" ]; then
+            cd $CACHE_DIR
+            if [ -d  llvm-project ]; then
+                # pull out the main branch
+                cd llvm-project
+                git checkout main 
+                git pull --recurse-submodules
+            else
+                # checkout the entire git project (slooooow)
+                git clone --recursive https://github.com/llvm/llvm-project.git llvm-project
+            fi
+
+            # copy all files but the .git structure (gigantic)
+            cd $BUILD_DIR
+            rm -rf clang-${CLANG_VER}
+            mkdir -p clang-${CLANG_VER}
+            rsync -a --exclude=.git $CACHE_DIR/llvm-project/ clang-${CLANG_VER}/
+            tar -c -I "xz -9 -T$NUMJOBS" -f ${CACHE_DIR}/clang-${CLANG_VER}.tar.xz clang-${CLANG_VER}
+            # cleanup
+            rm -rf clang-${CLANG_VER}
+        else 
+            # this is a standard released version
+            if [ ! -e "${CACHE_DIR}/clang-${CLANG_VER}.tar.xz" ]; then
+                # download it from the official github release URL
+                URL="https://github.com/llvm/llvm-project/archive/refs/tags/llvmorg-${CLANG_VER}.tar.gz" 
+                cd $CACHE_DIR
+                wget --no-check-certificate "$URL" -O clang-${CLANG_VER}.tar.gz
+                # recompress as original tarball has a weird prefix and is in gzip format
+                tar xaf clang-${CLANG_VER}.tar.gz
+                rm -rf clang-${CLANG_VER}
+                mv llvm-project-llvmorg-${CLANG_VER} clang-${CLANG_VER}
+                tar -c -I "xz -9 -T$NUMJOBS" -f clang-$CLANG_VER.tar.xz clang-${CLANG_VER}
+                # cleanup old downloaded file and temp folder
+                rm clang-${CLANG_VER}.tar.gz
+                rm -rf clang-${CLANG_VER}
+            fi
+        fi
+    fi
+    # Now that we have donwloaded and corrected the file, just untar
+    cd ${BUILD_DIR}
+    rm -rf clang-${CLANG_VER}
+    tar -x -a -f $CACHE_DIR/clang-${CLANG_VER}.tar.xz
+}
+
+CLANG_VER=${1:-"<version>"}
+if [ "$CLANG_VER" = "git" ]; then
+    CLANG_VER=$TODAY
+fi
+
+if [ -e $HOME/.build_clang ]; then
+    echo "Sourcing $HOME/.build_clang"
+    source $HOME/.build_clang
+fi
+
+# Set all environment variables with defaults
+BUILD_DIR=${BUILD_DIR:-"/tmp"}
+CACHE_DIR=${CACHE_DIR:-"$HOME/cache"}
+INSTALL_DIR=${INSTALL_DIR:-"$HOME/bin/clang-${CLANG_VER}"}
+CXX_COMPILER=${CXX:-$(which clang++) }
+C_COMPILER=${CC:-$(which clang) }
+LINKER=${LINKER:-$(which clang++) }
+NUMCPUS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
+NUMJOBS="${NUMJOBS:-$NUMCPUS}"
 
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <version> [installdir] [builddir] [cachedir]"
-    echo "Default cache:$DEFAULT_CACHE_DIR"
-    echo "Default build:/tmp/build-<version>"
-    echo "Default install:$PWD/clang-<version>"
+    echo "Usage: $0 <version>"
+    echo "  <version> can be one of the current released versions (see list below)," 
+    echo "     a previously saved date as 20220914 or 'git' for the current latest trunk"
+    echo "Optional environment variables to set:"
+    echo "  CACHE_DIR=$CACHE_DIR"
+    echo "  BUILD_DIR=$BUILD_DIR"
+    echo "  INSTALL_DIR=$INSTALL_DIR"
+    echo "  CXX_COMPILER=$CXX_COMPILER"
+    echo "  C_COMPILER=$C_COMPILER"
+    echo "  LINKER=$LINKER"
+    echo "If there is a file in $HOME/.build_clang it will be sourced for defaults"
     echo "Current versions:"
-    wget -qO- $MIRROR_URL/releases/download.html  | gzip -d | sed -n 's/.*Download LLVM \([0-9\.]*\).*/\1/p' | tr '\n' ' '
+    wget -qO- http://llvm.org/releases/download.html  | gzip -d | \
+         sed -n 's/.*Download LLVM \([0-9\.]*\).*/\1/p' | tr '\n' ' '
     echo
     exit 1
 fi
 
+echo "Optional variables set:"
+echo "  CACHE_DIR=$CACHE_DIR"
+echo "  BUILD_DIR=$BUILD_DIR"
+echo "  INSTALL_DIR=$INSTALL_DIR"
+echo "  CXX_COMPILER=$CXX_COMPILER"
+echo "  C_COMPILER=$C_COMPILER"
+echo "  LINKER=$LINKER"
+
+# Stop script on failure
 set -exo pipefail
 
-CLANG_VER="$1"
-
-DEFAULT_INSTALL_DIR=$PWD/clang-$CLANG_VER
-DEFAULT_BUILD_DIR=/tmp/build-$CLANG_VER
-
-if [ $# -ge 2 ]; then
-    INSTALL_DIR=$(readlink -f "$2" )
-else
-    INSTALL_DIR=$DEFAULT_INSTALL_DIR
-fi
-
-if [ $# -ge 3 ]; then
-    BUILD_DIR=$(readlink -f "$3" )
-else
-    BUILD_DIR=$DEFAULT_BUILD_DIR
-fi
-
-if [ $# -ge 4 ]; then
-    CACHE_DIR=$(readlink -f "$4" )
-else
-    CACHE_DIR=$DEFAULT_CACHE_DIR
-fi
-
-CXX_COMPILER=${CXX:-$(which 'clang++'||which 'g++') }
-C_COMPILER=${CC:-$(which clang||which gcc) }
-
-NUMCPUS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
-NUMJOBS="${NUMJOBS:-$NUMCPUS}"
-
-# create build directory
-mkdir -p $BUILD_DIR
+# create build, cache and install directories
+rm -rf "${BUILD_DIR}/clang-${CLANG_VER}" 
+mkdir -p "$BUILD_DIR/clang-${CLANG_VER}"
 mkdir -p $INSTALL_DIR
 mkdir -p $CACHE_DIR
 
-function patch_sources()
-{
-    #mangle_suppress_errors.patch
-    cat <<EOF | base64 -d | gzip -d | patch -p 2
-H4sIACpvelwCA+2V227aQBCGr8tTTJHaQsFgCGDj9BBCuIjUJFWgVe6sxd7Aqvauu7vOQVXfveNT
-AEECpFXVi84NaHc8+8//edY+u74G43Z67MdgRC0wZAykGQQ3YVMLEaimFxA+awZs2hyMJ81TTTiL
-wzNcC2jDiyKY7pFcMgxjr+ov2mbLNkzLODCh1XbaHadjN8wiAHdMs1Sr1fZSkRTtG2bbMDtgWk67
-7XQ6DatvWq2e1bKxqI1Fj44AD23ZdQtq6e8B4NKNYD4Mr67OSUizgtJxwvTPORX8K/W0kJP7qLRz
-Jq14gisNJzSi3KdcL3bg7aQKP0oGwAkjMy6UZp4a8RnjFF4nSwrew1BwTe90Y0Z1ulSpHiZPxFyx
-Gad++ujpCSamu0naMFZahNl6JclNYu0ExxlJKWS9SCh7hHOhIWsB9Jwp8AvNwLEluEmVg06k31Nd
-zpRk517SSEhdmRgfUMFAa8mmsaafhFep1nONmF4DuIg1vHsHZdeN+ZxwP6C+u2pY+bAEP3M+/YOM
-j93fymcwkN6818lqlXbO/I9pZ0wbfVui1e116jbS6nZ7GS1JvVgq6pRS6ewaKi/P4yDA2rmhSTSb
-MFAwJT4QlffzYAIwVQem3+A+1ZpiU6gFPEnUnPFZ41HXtnJJYlc2W5lsjQIa0ijA0btIUqUY8kpB
-vTLLC2UrrEYpqxHmr2JanI6csqSxDvUwIEolL32lurQhYunRSzyaVjK+SWxivNCVgE2igNs3M7iW
-tQ7XI4pCItFxjhkn8h5t95nGKiS4iKgk+LKkwpyC+3OQrQFb9es3uJU/OiBynXDL9BxEyPCF8yFk
-PvqSbXIfcpBTmnP0H6jtxex5xDbxetruguFUUvLtMANp413aQ5C21do0pSnKL6PJxMUZH2saOYtR
-/bfnbMOU4VXoKuxhadweG7Ply+8xs3NHClcBrdOx5IWx/V76sbKt7tPGIiJ+9vmSfo+ZpP6Yhf4g
-QIecv2Pzsps7Wb7BV9edxizQjLsijFyZd+IqbMUlSS9/yPCn7Fqn8AvyHiPm6woAAA==
-EOF
-    #err_ret_local_block.patch
-    cat <<EOF | base64 -d | gzip -d | patch -p 2
-H4sIAGRvelwCA6WPz0/CMBTH7/wV7+bI6NaJ/JqEoIEDCQeDxisp2xs0du3SFpAY/3dbcAlIPBjf
-4XVr3ufz+iWEAIuF2JWxVUqYOBNMrmPBV/EzluzYZpLbKKsqcHVLkz6hfZL0IOmkST/tdCNaFxDa
-o7QRhiGs/uYcEJqQNgXaTdu9tH3tHI+BdAd3tNWD8HgOYDxuwHkNhzCVlttDtEb7cqgwaJIRNwss
-UKPM8HTlxyaLKRm5oQlmImheWbhhwyemy1em/cQouJw/KThbL1wqvK/xT0BhEHgBgRc8CpW9Td8r
-PQrmDvlokHqDRwPf5iprQe4+0hS1Xmq0SwcxsVx59ueasObjGCZK3liwG632rnMDjlca8q3mcg0z
-6RKD3kpzCf1zr5vbagkFczF/S/2Q53rOVijOk8PVy/fMifYblN9S/2oGwoNQaFW6H2OZxRKlBXQq
-NIYrGV2o5sh2HrQbBJOpCiFXaLweZQ7cGhC8QMtLjBpfBU/LtecCAAA=
-EOF
-}
-
-function patch_install()
-{
-    #attr_dump_cpu_cases_compilation_fix.patch
-    cat <<EOF | base64 -d | gzip -d | patch -p 1
-H4sIAJZvelwCA72OQU+DMBxHz/IpfvFgmFhoa1il4EIz7prgvHeVKRGBQDkZv7ttpslu6sU26b9J
-X18eIQQ6aXvTLU9NYjrdPyeqfkiUtVO1vI2xezrjlN0QRglloEJyIdPrOBU05UKsGQgVlAZRFGH/
-d5GIBeNOtM7El6gsQTjPrliKyM8MZRnAr/3U6Nfc3z/8YfTcQDu9lNv7XdXOo7bmReI9IJ42Qz9b
-6MUOuKwVbj1vixPSl21CtcqP/GGYEJ58unjUHSRqRTZmXOZwtTpywF2NosC52244Kv9FXj02pj20
-5ue8b/If83aV2nqz7q3v+wTK8eBHFAIAAA==
-EOF
-}
+CXXOPTS="-O2 -DLLVM_ENABLE_DUMP -I$INSTALL_DIR/include"
+CXXLINK="-L$INSTALL_DIR/lib -L$INSTALL_DIR/lib64 -Wl,-rpath,$INSTALL_DIR/lib64 -Wl,-rpath,$INSTALL_DIR/lib"
+CCOPTS="-DLLVM_ENABLE_DUMP"
+CCLINK="-L$INSTALL_DIR/lib -L$INSTALL_DIR/lib64 -Wl,-rpath,$INSTALL_DIR/lib64 -Wl,-rpath,$INSTALL_DIR/lib"
 
 # build clang
-cd $BUILD_DIR
-if [ ! -e $BUILD_DIR/clang.$CLANG_VER.done ]; then
+download_clang        
 
-    CLANG_DIR="$BUILD_DIR/clang"
-    #PACKAGES="cfe llvm compiler-rt clang-tools-extra libcxx libcxxabi libunwind lld lldb openmp polly"
-    PACKAGES="cfe llvm compiler-rt clang-tools-extra libunwind lld lldb openmp polly"
-    for pkg in $PACKAGES; do
-        TARFILE="${pkg}-${CLANG_VER}.src.tar.xz"
-        UNTARDIR="${pkg}-$CLANG_VER"
-        if [ ! -e "$CACHE_DIR/$TARFILE" ]; then
-            wget "$MIRROR_URL/releases/$CLANG_VER/$TARFILE" -O "$CACHE_DIR/$TARFILE"
-        fi
-        rm -rf "$UNTARDIR"
-        rm -rf "$UNTARDIR.src"
-        tar xaf "$CACHE_DIR/$TARFILE"
-    done
+# configure
+cd "$BUILD_DIR/clang-${CLANG_VER}"
+mkdir -p build
+cd build
+cmake \
+    -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
+    -DCMAKE_PREFIX_PATH=$INSTALL_DIR \
+    -DCMAKE_BUILD_TYPE:STRING=Release \
+    -DCMAKE_CXX_COMPILER=$CXX_COMPILER \
+    -DCMAKE_C_COMPILER=$C_COMPILER \
+    -DCMAKE_C_FLAGS:STRING="$CXXOPTS" \
+    -DCMAKE_CXX_FLAGS:STRING="$CCOPTS" \
+    -DCMAKE_CXX_LINK_FLAGS="$CXXLINK" \
+    -DCMAKE_C_LINK_FLAGS="$CCLINK" \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+    -DLIBCXX_ENABLE_STATIC_ABI_LIBRARY=ON \
+    -DLIBCXX_STATICALLY_LINK_ABI_IN_SHARED_LIBRARY=OFF \
+    -DLIBCXX_STATICALLY_LINK_ABI_IN_STATIC_LIBRARY=ON \
+    -DLIBCXX_USE_COMPILER_RT=ON \
+    -DLIBCXXABI_USE_COMPILER_RT=ON \
+    -DLIBCXXABI_USE_LLVM_UNWINDER=ON \
+    -DLLVM_ENABLE_SPHINX=OFF \
+    -DLLVM_ENABLE_DOXYGEN=OFF \
+    -DLLVM_ENABLE_THREADS:BOOL=ON \
+    -DLLVM_ENABLE_PIC:BOOL=ON \
+    -DLLVM_ENABLE_FFI:BOOL=ON \
+    -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF \
+    -DLLVM_INSTALL_UTILS=ON \
+    -DLLVM_TARGETS_TO_BUILD="host;AMDGPU;BPF" \
+    -DLLVM_PARALLEL_COMPILE_JOBS=$NUMJOBS \
+    -DLLVM_PARALLEL_LINK_JOBS=$NUMJOBS \
+    -DLLVM_INCLUDE_EXAMPLES=OFF \
+    -DLLVM_INCLUDE_DOCS=OFF \
+    -DLLVM_INCLUDE_TOOLS=ON \
+    -DLLVM_INCLUDE_TESTS=ON \
+    -DLLVM_INCLUDE_BENCHMARKS=ON \
+    -DLLVM_BUILD_EXAMPLES=OFF \
+    -DLLVM_BUILD_TESTS=OFF \
+    -DLLVM_BUILD_TOOLS=ON \
+    -DLLVM_ENABLE_PROJECTS="clang;lld;lldb;polly;clang-tools-extra;bolt;mlir" \
+    -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind;libc" \
+    -DLLVM_USE_PERF=OFF \
+    -DLLVM_CCACHE_BUILD=OFF \
+    -DLLVM_ENABLE_ASSERTIONS=OFF \
+    -DLLVM_ENABLE_EH=OFF \
+    -DLLVM_ENABLE_RTTI=OFF \
+    -DCLANG_BUILD_TOOLS=ON \
+    -DCLANG_VENDOR="Vitorian LLC" \
+    -G Ninja \
+    "../llvm"
 
-    if [ ! -e "$CACHE_DIR/cppinsights.tar.xz" ]; then
-          git clone -b "v_0.2" https://github.com/andreasfertig/cppinsights.git
-          tar caf "$CACHE_DIR/cppinsights.tar.xz" cppinsights
-    fi
+# build full throttle
+time cmake --build . -- -j$NUMJOBS
 
-    # move to respective places
-    rm -rf $CLANG_DIR
-    mv -v llvm-${CLANG_VER}.src $CLANG_DIR
-    mv -v cfe-${CLANG_VER}.src $CLANG_DIR/tools/clang
-    mv -v clang-tools-extra-${CLANG_VER}.src $CLANG_DIR/tools/clang/tools/extra
-    mv -v compiler-rt-${CLANG_VER}.src $CLANG_DIR/projects/compiler-rt
-    #mv -v libcxx-${CLANG_VER}.src $CLANG_DIR/projects/libcxx
-    #mv -v libcxxabi-${CLANG_VER}.src $CLANG_DIR/projects/libcxxabi
-    mv -v polly-${CLANG_VER}.src $CLANG_DIR/tools/polly
-    mv -v libunwind-${CLANG_VER}.src $CLANG_DIR/projects/libunwind
-    mv -v openmp-${CLANG_VER}.src $CLANG_DIR/projects/openmp
-    mv -v lld-${CLANG_VER}.src $CLANG_DIR/tools/lld
-    mv -v lldb-${CLANG_VER}.src $CLANG_DIR/tools/lldb
+# install
+cmake --build . --target install/strip -- -j$NUMJOBS
 
-    #rm -rf cppinsights
-    #tar xaf "$CACHE_DIR/cppinsights.tar.xz"
-    #mv -v cppinsights $CLANG_DIR/tools/clang/tools/extra
-    #echo "add_subdirectory(cppinsights)" >> $CLANG_DIR/tools/clang/tools/extra/CMakeLists.txt
+cat <<EOF > $INSTALL_DIR/env_vars.sh
+PATH=$INSTALL_DIR/bin:$PATH
+LD_LIBRARY_PATH=$INSTALL_DIR/lib:$INSTALL_DIR/lib64:$LD_LIBRARY_PATH
+MAN_PATH=$INSTALL_DIR/share/man:$MAN_PATH
+EOF
 
-    # for facebook plugins to work
-    pushd $CLANG_DIR
-    patch_sources
-    popd
-
-    # configure
-    rm -rf $BUILD_DIR/build
-    mkdir -p $BUILD_DIR/build
-    cd $BUILD_DIR/build
-    cmake -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_CXX_COMPILER=$CXX_COMPILER \
-          -DCMAKE_C_COMPILER=$C_COMPILER \
-          -DCMAKE_C_FLAGS=-DLLVM_ENABLE_DUMP \
-          -DCMAKE_CXX_FLAGS=-DLLVM_ENABLE_DUMP \
-          -DLLVM_INCLUDE_TOOLS=ON \
-          -DLLVM_INCLUDE_TESTS=OFF \
-          -DLLVM_INCLUDE_DOCS=OFF \
-          -DLLVM_INCLUDE_EXAMPLES=ON \
-          -DLLVM_BUILD_EXAMPLES=OFF \
-          -DLLVM_BUILD_EXTERNAL_COMPILER_RT=On \
-          -DLLVM_BUILD_TESTS=OFF \
-          -DLLVM_BUILD_TOOLS=ON \
-          -DLLVM_ENABLE_ASSERTIONS=Off \
-          -DLLVM_ENABLE_EH=ON \
-          -DLLVM_ENABLE_RTTI=ON \
-          -DLLVM_ENABLE_CXX1Y=ON \
-          -DLLVM_TARGETS_TO_BUILD=all \
-          -DLLVM_CCACHE_BUILD=ON \
-          -DCLANG_BUILD_TOOLS=ON \
-          -DCLANG_VENDOR="Vitorian LLC" \
-          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-          -DCMAKE_SHARED_LINKER_FLAGS="-lstdc++ -fPIC" \
-          -G Ninja \
-          "$CLANG_DIR"
-
-    # build full throttle
-    time cmake --build . -- -j$NUMJOBS
-
-    # in case it fails with some memory bs, retry with one CPU
-    cmake --build . -- -j1
-
-    # install
-    cmake --build . --target install
-    pushd $INSTALL_DIR
-    patch_install
-    popd
-
-    # done, signalize
-    touch $BUILD_DIR/clang.$CLANG_VER.done
-fi
-
-# build clang
-cd $BUILD_DIR
-if [ ! -e $BUILD_DIR/facebook.$CLANG_VER.done ]; then
-    TARFILE=facebook-clang-plugins.tgz
-    if [ ! -e "$CACHE_DIR/$TARFILE" ]; then
-        git clone https://github.com/facebook/facebook-clang-plugins.git
-        tar caf $CACHE_DIR/$TARFILE facebook-clang-plugins
-        rm -rf facebook-clang-plugins
-    fi
-    rm -rf facebook-clang-plugins
-    tar xaf "$CACHE_DIR/$TARFILE"
-
-    cd facebook-clang-plugins
-    CC=$INSTALL_DIR/bin/clang \
-    CXX=$INSTALL_DIR/bin/clang++ \
-    CLANG_PREFIX=$INSTALL_DIR \
-      make -C libtooling -j $NUMJOBS
-    touch $BUILD_DIR/facebook.$CLANG_VER.done
-fi
-
-exit 0
