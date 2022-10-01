@@ -65,7 +65,7 @@ function download_clang()
     # Now that we have donwloaded and corrected the file, just untar
     cd ${BUILD_DIR}
     rm -rf clang-${CLANG_VER}
-    tar -x -a -f $CACHE_DIR/clang-${CLANG_VER}.tar.xz
+    tar xaf $CACHE_DIR/clang-${CLANG_VER}.tar.xz
 }
 
 CLANG_VER=${1:-"<version>"}
@@ -85,8 +85,9 @@ INSTALL_DIR=${INSTALL_DIR:-"$HOME/bin/clang-${CLANG_VER}"}
 CXX_COMPILER=${CXX:-$(which clang++) }
 C_COMPILER=${CC:-$(which clang) }
 LINKER=${LINKER:-$(which clang++) }
-NUMCPUS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
-NUMJOBS="${NUMJOBS:-$NUMCPUS}"
+NUMCPUS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
+NUMJOBS=${NUMJOBS:-$NUMCPUS}
+BUILD_TYPE=${BUILD_TYPE:-Release}
 
 if [ $# -lt 1 ]; then
     echo "Usage: $0 <version>"
@@ -99,6 +100,7 @@ if [ $# -lt 1 ]; then
     echo "  CXX_COMPILER=$CXX_COMPILER"
     echo "  C_COMPILER=$C_COMPILER"
     echo "  LINKER=$LINKER"
+    echo "  BUILD_TYPE=$BUILD_TYPE"
     echo "If there is a file in $HOME/.build_clang it will be sourced for defaults"
     echo "Current versions:"
     wget -qO- http://llvm.org/releases/download.html  | gzip -d | \
@@ -114,13 +116,13 @@ echo "  INSTALL_DIR=$INSTALL_DIR"
 echo "  CXX_COMPILER=$CXX_COMPILER"
 echo "  C_COMPILER=$C_COMPILER"
 echo "  LINKER=$LINKER"
+echo "  BUILD_TYPE=$BUILD_TYPE"
 
 # Stop script on failure
-set -exo pipefail
+set -eo pipefail
 
 # create build, cache and install directories
-rm -rf "${BUILD_DIR}/clang-${CLANG_VER}" 
-mkdir -p "$BUILD_DIR/clang-${CLANG_VER}"
+mkdir -p $BUILD_DIR
 mkdir -p $INSTALL_DIR
 mkdir -p $CACHE_DIR
 
@@ -129,70 +131,81 @@ CXXLINK="-L$INSTALL_DIR/lib -L$INSTALL_DIR/lib64 -Wl,-rpath,$INSTALL_DIR/lib64 -
 CCOPTS="-DLLVM_ENABLE_DUMP"
 CCLINK="-L$INSTALL_DIR/lib -L$INSTALL_DIR/lib64 -Wl,-rpath,$INSTALL_DIR/lib64 -Wl,-rpath,$INSTALL_DIR/lib"
 
-# build clang
-download_clang        
+# avoid configuring clang if the build is already done successfully
+if [ ! -d ${BUILD_DIR}/clang-${CLANG_VER}/build ] || [ ! -f ${INSTALL_DIR}/env_vars.sh ]; then
 
-# configure
-cd "$BUILD_DIR/clang-${CLANG_VER}"
-mkdir -p build
-cd build
-cmake \
-    -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
-    -DCMAKE_PREFIX_PATH=$INSTALL_DIR \
-    -DCMAKE_BUILD_TYPE:STRING=Release \
-    -DCMAKE_CXX_COMPILER=$CXX_COMPILER \
-    -DCMAKE_C_COMPILER=$C_COMPILER \
-    -DCMAKE_C_FLAGS:STRING="$CXXOPTS" \
-    -DCMAKE_CXX_FLAGS:STRING="$CCOPTS" \
-    -DCMAKE_CXX_LINK_FLAGS="$CXXLINK" \
-    -DCMAKE_C_LINK_FLAGS="$CCLINK" \
-    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-    -DLIBCXX_ENABLE_STATIC_ABI_LIBRARY=ON \
-    -DLIBCXX_STATICALLY_LINK_ABI_IN_SHARED_LIBRARY=OFF \
-    -DLIBCXX_STATICALLY_LINK_ABI_IN_STATIC_LIBRARY=ON \
-    -DLIBCXX_USE_COMPILER_RT=ON \
-    -DLIBCXXABI_USE_COMPILER_RT=ON \
-    -DLIBCXXABI_USE_LLVM_UNWINDER=ON \
-    -DLLVM_ENABLE_SPHINX=OFF \
-    -DLLVM_ENABLE_DOXYGEN=OFF \
-    -DLLVM_ENABLE_THREADS:BOOL=ON \
-    -DLLVM_ENABLE_PIC:BOOL=ON \
-    -DLLVM_ENABLE_FFI:BOOL=ON \
-    -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF \
-    -DLLVM_INSTALL_UTILS=ON \
-    -DLLVM_TARGETS_TO_BUILD="host;AMDGPU;BPF" \
-    -DLLVM_PARALLEL_COMPILE_JOBS=$NUMJOBS \
-    -DLLVM_PARALLEL_LINK_JOBS=$NUMJOBS \
-    -DLLVM_INCLUDE_EXAMPLES=OFF \
-    -DLLVM_INCLUDE_DOCS=OFF \
-    -DLLVM_INCLUDE_TOOLS=ON \
-    -DLLVM_INCLUDE_TESTS=ON \
-    -DLLVM_INCLUDE_BENCHMARKS=ON \
-    -DLLVM_BUILD_EXAMPLES=OFF \
-    -DLLVM_BUILD_TESTS=OFF \
-    -DLLVM_BUILD_TOOLS=ON \
-    -DLLVM_ENABLE_PROJECTS="clang;lld;lldb;polly;clang-tools-extra;bolt;mlir" \
-    -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind;libc" \
-    -DLLVM_USE_PERF=OFF \
-    -DLLVM_CCACHE_BUILD=OFF \
-    -DLLVM_ENABLE_ASSERTIONS=OFF \
-    -DLLVM_ENABLE_EH=OFF \
-    -DLLVM_ENABLE_RTTI=OFF \
-    -DCLANG_BUILD_TOOLS=ON \
-    -DCLANG_VENDOR="Vitorian LLC" \
-    -G Ninja \
-    "../llvm"
+    # download from git or the official repo
+    download_clang        
 
-# build full throttle
+    # configure
+    cd "$BUILD_DIR/clang-${CLANG_VER}"
+    mkdir -p build
+    cd build
+    cmake \
+        -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
+        -DCMAKE_INSTALL_LIBDIR=$INSTALL_DIR/lib \
+        -DCMAKE_PREFIX_PATH=$INSTALL_DIR \
+        -DCMAKE_BUILD_TYPE:STRING=Release \
+        -DCMAKE_CXX_COMPILER=$CXX_COMPILER \
+        -DCMAKE_C_COMPILER=$C_COMPILER \
+        -DCMAKE_C_FLAGS:STRING="$CXXOPTS" \
+        -DCMAKE_CXX_FLAGS:STRING="$CCOPTS" \
+        -DCMAKE_CXX_LINK_FLAGS="$CXXLINK" \
+        -DCMAKE_C_LINK_FLAGS="$CCLINK" \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+        -DLIBCXX_ENABLE_STATIC_ABI_LIBRARY=ON \
+        -DLIBCXX_STATICALLY_LINK_ABI_IN_SHARED_LIBRARY=OFF \
+        -DLIBCXX_STATICALLY_LINK_ABI_IN_STATIC_LIBRARY=ON \
+        -DLIBCXX_USE_COMPILER_RT=ON \
+        -DLIBCXXABI_USE_COMPILER_RT=ON \
+        -DLIBCXXABI_USE_LLVM_UNWINDER=ON \
+        -DLLVM_ENABLE_SPHINX=OFF \
+        -DLLVM_ENABLE_DOXYGEN=OFF \
+        -DLLVM_ENABLE_THREADS:BOOL=ON \
+        -DLLVM_ENABLE_PIC:BOOL=ON \
+        -DLLVM_ENABLE_FFI:BOOL=ON \
+        -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF \
+        -DLLVM_INSTALL_UTILS=ON \
+        -DLLVM_TARGETS_TO_BUILD="host;AMDGPU;BPF" \
+        -DLLVM_PARALLEL_COMPILE_JOBS=$NUMJOBS \
+        -DLLVM_PARALLEL_LINK_JOBS=$NUMJOBS \
+        -DLLVM_INCLUDE_EXAMPLES=OFF \
+        -DLLVM_INCLUDE_DOCS=OFF \
+        -DLLVM_INCLUDE_TOOLS=ON \
+        -DLLVM_INCLUDE_TESTS=ON \
+        -DLLVM_INCLUDE_BENCHMARKS=ON \
+        -DLLVM_BUILD_EXAMPLES=OFF \
+        -DLLVM_BUILD_TESTS=OFF \
+        -DLLVM_BUILD_TOOLS=ON \
+        -DLLVM_ENABLE_PROJECTS="clang;lld;lldb;polly;clang-tools-extra;mlir" \
+        -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind" \
+        -DLLVM_USE_PERF=OFF \
+        -DLLVM_CCACHE_BUILD=OFF \
+        -DLLVM_ENABLE_ASSERTIONS=OFF \
+        -DLLVM_ENABLE_EH=OFF \
+        -DLLVM_ENABLE_RTTI=OFF \
+        -DCLANG_BUILD_TOOLS=ON \
+        -DCLANG_VENDOR="Vitorian LLC" \
+        -G Ninja \
+        "../llvm"
+fi
+
+# (re)build full throttle
+cd ${BUILD_DIR}/clang-${CLANG_VER}/build
 time cmake --build . -- -j$NUMJOBS
 
 # install
 cmake --build . --target install/strip -- -j$NUMJOBS
 
 cat <<EOF > $INSTALL_DIR/env_vars.sh
+# LLVM built on $(date +%Y%m%d-%H%M) by user $(whoami)
 PATH=$INSTALL_DIR/bin:$PATH
 LD_LIBRARY_PATH=$INSTALL_DIR/lib:$INSTALL_DIR/lib64:$LD_LIBRARY_PATH
 MAN_PATH=$INSTALL_DIR/share/man:$MAN_PATH
 EOF
+
+echo "As a convenience, I created an env_vars.sh file to facilitate using this compiler "
+echo "Usage:" 
+echo "  $$ source $INSTALL_DIR/env_vars.sh"
 
