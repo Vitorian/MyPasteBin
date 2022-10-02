@@ -70,9 +70,11 @@ function download_clang()
 
 CLANG_VER=${1:-"<version>"}
 SUFFIX=
+ENABLE_ZSTD="OFF"
 if [ "$CLANG_VER" = "git" ]; then
     CLANG_VER=$TODAY
     SUFFIX="-$TODAY"
+    ENABLE_ZSTD="ON" # ZSTD is fixed in trunk
 fi
 
 if [ -e $HOME/.build_clang ]; then
@@ -83,8 +85,17 @@ fi
 source /etc/os-release
 DISTRO="${ID}-${VERSION_ID}"
 PKGEN="TXZ"
+DEB_OPTIONS=
+RPM_OPTIONS=
 if [ "$ID" == "ubuntu" ]; then
     PKGEN="$PKGEN;DEB"
+    if [ ${VERSION_ID} == "20.04" ]; then
+        DEPENDS="-DCPACK_DEBIAN_PACKAGE_DEPENDS=libc6,libgcc-s1,libstdc++6,libedit2,libffi7,libtinfo6,zlib1g,libc6-dev,binutils"
+    fi
+    if [ ${VERSION_ID} == "22.04" ]; then
+        DEPENDS="-DCPACK_DEBIAN_PACKAGE_DEPENDS=libc6,libgcc-s1,libstdc++6,libedit2,libffi7,libtinfo6,zlib1g,libc6-dev,binutils"
+    fi
+    DEB_OPTIONS="-DCPACK_BINARY_DEB=ON $DEPENDS"
 fi
 
 # Set all environment variables with defaults
@@ -146,8 +157,6 @@ if [ ! -d ${BUILD_DIR}/clang-${CLANG_VER}/build ] || [ ! -f ${INSTALL_DIR}/env_v
     # download from git or the official repo
     download_clang        
 
-    DEPENDS="libc6;libgcc-s1;libstdc++6;libedit2;libffi7;libtinfo6;zlib1g;libc6-dev;binutils"
-
     # configure
     cd "$BUILD_DIR/clang-${CLANG_VER}"
     mkdir -p build
@@ -165,16 +174,15 @@ if [ ! -d ${BUILD_DIR}/clang-${CLANG_VER}/build ] || [ ! -f ${INSTALL_DIR}/env_v
         -DCMAKE_C_LINK_FLAGS="$CCLINK" \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-        -DCPACK_BINARY_DEB=ON \
         -DCPACK_PACKAGE_CONTACT="Henrique Bucher <henry@vitorian.com>" \
         -DCPACK_PACKAGE_VENDOR="Vitorian LLC" \
-        -DCPACK_DEBIAN_PACKAGE_DEPENDS="$DEPENDS" \
+        $DEB_OPTIONS $RPM_OPTIONS \
         -DCPACK_ARCHIVE_THREADS=$NUMJOBS \
         -DCPACK_GENERATOR="$PKGEN"  \
         -DCPACK_SOURCE_GENERATOR="$PKGEN" \
         -DCPACK_PACKAGING_INSTALL_PREFIX="${INSTALL_DIR}" \
         -DCPACK_PACKAGE_DESCRIPTION_SUMMARY="LLVM built with cmake on ${DISTRO}" \
-        -DCPACK_PACKAGE_NAME="llvm" \
+        -DCPACK_PACKAGE_NAME="llvm-$CLANG_VER" \
         -DCPACK_SYSTEM_NAME="${DISTRO}" \
         -DCPACK_STRIP_FILES=ON \
         -DCPACK_THREADS=$NUMJOBS \
@@ -184,7 +192,7 @@ if [ ! -d ${BUILD_DIR}/clang-${CLANG_VER}/build ] || [ ! -f ${INSTALL_DIR}/env_v
         -DLIBCXX_USE_COMPILER_RT=ON \
         -DLIBCXXABI_USE_COMPILER_RT=ON \
         -DLIBCXXABI_USE_LLVM_UNWINDER=ON \
-        -DLLVM_ENABLE_ZSTD=OFF \
+        -DLLVM_ENABLE_ZSTD=${ENABLE_ZSTD} \
         -DLLVM_ENABLE_SPHINX=OFF \
         -DLLVM_ENABLE_DOXYGEN=OFF \
         -DLLVM_ENABLE_THREADS:BOOL=ON \
@@ -224,8 +232,7 @@ time cmake --build . -- -j$NUMJOBS
 # install
 cmake --build . --target install/strip -- -j$NUMJOBS
 cmake --build . --target package
-cmake --build . --target source_package
-cp -v llvm-* ${INSTALL_DIR}
+cmake --build . --target package_source
 
 # cleanup
 cmake --build . --target clean
