@@ -69,8 +69,10 @@ function download_clang()
 }
 
 CLANG_VER=${1:-"<version>"}
+SUFFIX=
 if [ "$CLANG_VER" = "git" ]; then
     CLANG_VER=$TODAY
+    SUFFIX="-$TODAY"
 fi
 
 if [ -e $HOME/.build_clang ]; then
@@ -78,11 +80,18 @@ if [ -e $HOME/.build_clang ]; then
     source $HOME/.build_clang
 fi
 
+source /etc/os-release
+DISTRO="${ID}-${VERSION_ID}"
+PKGEN="TXZ"
+if [ "$ID" == "ubuntu" ]; then
+    PKGEN="$PKGEN;DEB"
+fi
+
 # Set all environment variables with defaults
 BUILD_DIR=${BUILD_DIR:-"/tmp"}
 CACHE_DIR=${CACHE_DIR:-"$HOME/cache"}
-INSTALL_DIR=${INSTALL_DIR:-"$HOME/bin/clang-${CLANG_VER}"}
-CXX_COMPILER=${CXX:-$(which clang++) }
+INSTALL_DIR=${INSTALL_DIR:-"/opt/vitorian/clang-${CLANG_VER}"}
+CXX_COMPILER=${CXX:-$(which clang++) }  
 C_COMPILER=${CC:-$(which clang) }
 LINKER=${LINKER:-$(which clang++) }
 NUMCPUS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
@@ -119,7 +128,7 @@ echo "  LINKER=$LINKER"
 echo "  BUILD_TYPE=$BUILD_TYPE"
 
 # Stop script on failure
-set -eo pipefail
+set -ex o pipefail
 
 # create build, cache and install directories
 mkdir -p $BUILD_DIR
@@ -137,6 +146,8 @@ if [ ! -d ${BUILD_DIR}/clang-${CLANG_VER}/build ] || [ ! -f ${INSTALL_DIR}/env_v
     # download from git or the official repo
     download_clang        
 
+    DEPENDS="libc6;libgcc-s1;libstdc++6;libedit2;libffi7;libtinfo6;zlib1g;libc6-dev;binutils"
+
     # configure
     cd "$BUILD_DIR/clang-${CLANG_VER}"
     mkdir -p build
@@ -145,7 +156,7 @@ if [ ! -d ${BUILD_DIR}/clang-${CLANG_VER}/build ] || [ ! -f ${INSTALL_DIR}/env_v
         -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
         -DCMAKE_INSTALL_LIBDIR=$INSTALL_DIR/lib \
         -DCMAKE_PREFIX_PATH=$INSTALL_DIR \
-        -DCMAKE_BUILD_TYPE:STRING=Release \
+        -DCMAKE_BUILD_TYPE:STRING=$BUILD_TYPE \
         -DCMAKE_CXX_COMPILER=$CXX_COMPILER \
         -DCMAKE_C_COMPILER=$C_COMPILER \
         -DCMAKE_C_FLAGS:STRING="$CXXOPTS" \
@@ -154,12 +165,26 @@ if [ ! -d ${BUILD_DIR}/clang-${CLANG_VER}/build ] || [ ! -f ${INSTALL_DIR}/env_v
         -DCMAKE_C_LINK_FLAGS="$CCLINK" \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+        -DCPACK_BINARY_DEB=ON \
+        -DCPACK_PACKAGE_CONTACT="Henrique Bucher <henry@vitorian.com>" \
+        -DCPACK_PACKAGE_VENDOR="Vitorian LLC" \
+        -DCPACK_DEBIAN_PACKAGE_DEPENDS="$DEPENDS" \
+        -DCPACK_ARCHIVE_THREADS=$NUMJOBS \
+        -DCPACK_GENERATOR="$PKGEN"  \
+        -DCPACK_SOURCE_GENERATOR="$PKGEN" \
+        -DCPACK_PACKAGING_INSTALL_PREFIX="${INSTALL_DIR}" \
+        -DCPACK_PACKAGE_DESCRIPTION_SUMMARY="LLVM built with cmake on ${DISTRO}" \
+        -DCPACK_PACKAGE_NAME="llvm" \
+        -DCPACK_SYSTEM_NAME="${DISTRO}" \
+        -DCPACK_STRIP_FILES=ON \
+        -DCPACK_THREADS=$NUMJOBS \
         -DLIBCXX_ENABLE_STATIC_ABI_LIBRARY=ON \
         -DLIBCXX_STATICALLY_LINK_ABI_IN_SHARED_LIBRARY=OFF \
         -DLIBCXX_STATICALLY_LINK_ABI_IN_STATIC_LIBRARY=ON \
         -DLIBCXX_USE_COMPILER_RT=ON \
         -DLIBCXXABI_USE_COMPILER_RT=ON \
         -DLIBCXXABI_USE_LLVM_UNWINDER=ON \
+        -DLLVM_ENABLE_ZSTD=OFF \
         -DLLVM_ENABLE_SPHINX=OFF \
         -DLLVM_ENABLE_DOXYGEN=OFF \
         -DLLVM_ENABLE_THREADS:BOOL=ON \
@@ -178,13 +203,14 @@ if [ ! -d ${BUILD_DIR}/clang-${CLANG_VER}/build ] || [ ! -f ${INSTALL_DIR}/env_v
         -DLLVM_BUILD_EXAMPLES=OFF \
         -DLLVM_BUILD_TESTS=OFF \
         -DLLVM_BUILD_TOOLS=ON \
-        -DLLVM_ENABLE_PROJECTS="clang;lld;lldb;polly;clang-tools-extra;mlir" \
+        -DLLVM_ENABLE_PROJECTS="clang;lld;lldb;polly;clang-tools-extra;mlir;libc;bolt" \
         -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind" \
         -DLLVM_USE_PERF=OFF \
         -DLLVM_CCACHE_BUILD=OFF \
         -DLLVM_ENABLE_ASSERTIONS=OFF \
         -DLLVM_ENABLE_EH=OFF \
         -DLLVM_ENABLE_RTTI=OFF \
+        -DLLVM_VERSION_SUFFIX="${SUFFIX}" \
         -DCLANG_BUILD_TOOLS=ON \
         -DCLANG_VENDOR="Vitorian LLC" \
         -G Ninja \
@@ -197,15 +223,22 @@ time cmake --build . -- -j$NUMJOBS
 
 # install
 cmake --build . --target install/strip -- -j$NUMJOBS
+cmake --build . --target package
+cmake --build . --target source_package
+cp -v llvm-* ${INSTALL_DIR}
+
+# cleanup
+cmake --build . --target clean
+rm -rf _CPack_Packages
 
 cat <<EOF > $INSTALL_DIR/env_vars.sh
 # LLVM built on $(date +%Y%m%d-%H%M) by user $(whoami)
-PATH=$INSTALL_DIR/bin:$PATH
-LD_LIBRARY_PATH=$INSTALL_DIR/lib:$INSTALL_DIR/lib64:$LD_LIBRARY_PATH
-MAN_PATH=$INSTALL_DIR/share/man:$MAN_PATH
+PATH=$INSTALL_DIR/bin:\$PATH
+LD_LIBRARY_PATH=$INSTALL_DIR/lib:$INSTALL_DIR/lib64:\$LD_LIBRARY_PATH
+MAN_PATH=$INSTALL_DIR/share/man:\$MAN_PATH
 EOF
 
 echo "As a convenience, I created an env_vars.sh file to facilitate using this compiler "
 echo "Usage:" 
-echo "  $$ source $INSTALL_DIR/env_vars.sh"
+echo "\$ source $INSTALL_DIR/env_vars.sh"
 
