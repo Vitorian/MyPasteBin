@@ -90,10 +90,10 @@ RPM_OPTIONS=
 if [ "$ID" == "ubuntu" ]; then
     PKGEN="$PKGEN;DEB"
     if [ ${VERSION_ID} == "20.04" ]; then
-        DEPENDS="-DCPACK_DEBIAN_PACKAGE_DEPENDS=libc6,libgcc-s1,libstdc++6,libedit2,libffi7,libtinfo6,zlib1g,libc6-dev,binutils"
+        DEPENDS="-DCPACK_DEBIAN_PACKAGE_DEPENDS=libc6,libc6-dev,libgcc-s1,libgcc-9-dev,libstdc++6,libstdc++-9-dev,libedit2,libffi7,libtinfo6,zlib1g,libc6-dev,binutils,libxml2"
     fi
     if [ ${VERSION_ID} == "22.04" ]; then
-        DEPENDS="-DCPACK_DEBIAN_PACKAGE_DEPENDS=libc6,libgcc-s1,libstdc++6,libedit2,libffi7,libtinfo6,zlib1g,libc6-dev,binutils"
+        DEPENDS="-DCPACK_DEBIAN_PACKAGE_DEPENDS=libc6,libc6-dev,libgcc-s1,libgcc-11-dev,libstdc++6,libstdc++-11-dev,libedit2,libffi8,libtinfo6,zlib1g,libc6-dev,binutils,libxml2"
     fi
     DEB_OPTIONS="-DCPACK_BINARY_DEB=ON $DEPENDS"
 fi
@@ -182,7 +182,7 @@ if [ ! -d ${BUILD_DIR}/clang-${CLANG_VER}/build ] || [ ! -f ${INSTALL_DIR}/env_v
         -DCPACK_SOURCE_GENERATOR="$PKGEN" \
         -DCPACK_PACKAGING_INSTALL_PREFIX="${INSTALL_DIR}" \
         -DCPACK_PACKAGE_DESCRIPTION_SUMMARY="LLVM built with cmake on ${DISTRO}" \
-        -DCPACK_PACKAGE_NAME="llvm-$CLANG_VER" \
+        -DCPACK_PACKAGE_NAME="llvmhb" \
         -DCPACK_SYSTEM_NAME="${DISTRO}" \
         -DCPACK_STRIP_FILES=ON \
         -DCPACK_THREADS=$NUMJOBS \
